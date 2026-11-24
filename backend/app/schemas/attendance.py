@@ -24,3 +24,14 @@ class AttendanceSessionResponse(BaseModel):
     is_active: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+
+class AttendanceMarkResponse(BaseModel):
+    id: int
+    session_id: int
+    student_id: int
+    marked_at: datetime
+    status: str
+
+    model_config = ConfigDict(from_attributes=True)

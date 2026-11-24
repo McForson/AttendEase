@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db
-from app.models import User, UserRole, Course, AttendanceSession
-from app.schemas.attendance import ( AttendanceSessionCreate, AttendanceSessionResponse)
+from app.models import User, UserRole, Course, AttendanceSession, Attendance, Enrollment
+from app.schemas.attendance import ( AttendanceSessionCreate, AttendanceSessionResponse, AttendanceMarkResponse)
 from app.core.permissions import require_role
 
 
@@ -149,3 +149,94 @@ async def close_attendance_session(
     await db.refresh(attendance_session)
 
     return attendance_session
+
+
+
+
+@router.post(
+    "/sessions/{session_id}/mark",
+    response_model=AttendanceMarkResponse,
+    status_code=status.HTTP_201_CREATED
+)
+async def mark_attendance(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(
+        require_role(UserRole.STUDENT)
+    )
+):
+    result = await db.execute(
+        select(AttendanceSession).where(
+            AttendanceSession.id == session_id
+        )
+    )
+
+    attendance_session = result.scalar_one_or_none()
+
+    if attendance_session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attendance session not found"
+        )
+
+
+    if not attendance_session.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This attendance session is closed"
+        )
+
+    now = datetime.now(timezone.utc)
+
+    if attendance_session.expires_at <= now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This attendance session has expired"
+        )
+
+
+    result = await db.execute(
+        select(Enrollment).where(
+            Enrollment.student_id == current_user.id,
+            Enrollment.course_id == attendance_session.course_id
+        )
+    )
+
+    enrollment = result.scalar_one_or_none()
+
+    if enrollment is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not enrolled in this course"
+        )
+
+
+    result = await db.execute(
+        select(Attendance).where(
+            Attendance.session_id == attendance_session.id,
+            Attendance.student_id == current_user.id
+        )
+    )
+
+    existing_attendance = result.scalar_one_or_none()
+
+    if existing_attendance is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You have already marked attendance for this session"
+        )
+
+
+    new_attendance = Attendance(
+        session_id=attendance_session.id,
+        student_id=current_user.id,
+        status="PRESENT"
+    )
+
+    db.add(new_attendance)
+
+    await db.commit()
+
+    await db.refresh(new_attendance)
+
+    return new_attendance
